@@ -1,0 +1,96 @@
+version: '3'
+services:
+  # Auth service
+  db_users:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: ${PG_DB_NAME}
+      POSTGRES_USER: ${PG_DB_USER}
+      POSTGRES_PASSWORD: ${PG_DB_PASSWORD}
+    volumes:
+      - postgres_data_users:/var/lib/postgresql/data/
+    env_file:
+      - .env
+
+  redis_token:
+    image: redis:7.2-rc2
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: /bin/sh -c "redis-server --requirepass $$REDIS_PASSWORD"
+    restart: on-failure
+    env_file:
+      - .env
+
+  auth_app:
+    image: suomire/auth_app:1.1
+    env_file:
+      - .env
+    depends_on:
+      - redis_token
+      - db_users
+
+  # Movies API
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data_movies:/var/lib/postgresql/data/
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    env_file:
+      - .env
+
+  elastic:
+    image: elasticsearch:8.6.2
+    environment:
+      - discovery.type=single-node
+      - ingest.geoip.downloader.enabled=false
+      - xpack.security.enabled=false
+      # - "ES_JAVA_OPTS: -Xms2g -Xmx2g"
+    restart: on-failure
+
+  redis:
+    image: redis:7.2-rc2
+    restart: on-failure
+
+  django_admin:
+    image: suomire/admin_web_static:1.1
+    volumes:
+      - static_data:/usr/src/app/static/
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  nginx:
+    image: nginx:1.25.1-alpine
+    depends_on:
+      - django_admin
+    ports:
+      - "${NGINX_PORT}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx:/etc/nginx/conf.d:ro
+      - static_data:/usr/src/app/static/
+
+  movies_api:
+    image: suomire/movies_api:1.1
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - elastic
+      - db
+
+  etl:
+    image: gennadybr/4_etl:v3
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - elastic
+      - db
+    restart: always
+
+volumes:
+  postgres_data_users:
+  postgres_data_movies:
+  static_data:
